@@ -34,6 +34,9 @@ void app_main() {
     i2c_master_transmit(dev_handle, wakeUpMCU, sizeof(wakeUpMCU), -1);
 
 
+    uint8_t buf[1] = {0x3B};
+    uint8_t buffer[6];
+    i2c_master_transmit_receive(dev_handle, buf, sizeof(buf), buffer, sizeof(buffer), -1);
 }
 
 
