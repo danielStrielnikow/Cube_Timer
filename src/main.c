@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
+#include "freertos/FreeRTOS.h"
 
 #define PIN_I2C_SCL_GPIO_NUM_22 GPIO_NUM_22
 #define PIN_I2C_SDA_GPIO_NUM_21 GPIO_NUM_21
@@ -36,12 +37,17 @@ void app_main() {
 
     uint8_t buf[1] = {0x3B};
     uint8_t buffer[6];
-    i2c_master_transmit_receive(dev_handle, buf, sizeof(buf), buffer, sizeof(buffer), -1);
+
+    while (1) {
+        i2c_master_transmit_receive(dev_handle, buf, sizeof(buf), buffer, sizeof(buffer), -1);
+        int16_t x = (buffer[0] << 8) | buffer[1];
+        int16_t y = (buffer[2] << 8) | buffer[3];
+        int16_t z = (buffer[4] << 8) | buffer[5];
+
+        printf("X %d\n", x);
+        printf("Y %d\n", y);
+        printf("Z %d\n", z);
+
+        vTaskDelay(1000/portTICK_PERIOD_MS);
+    }
 }
-
-
-
-
-
-
-
