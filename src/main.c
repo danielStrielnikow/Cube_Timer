@@ -2,6 +2,7 @@
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "freertos/FreeRTOS.h"
+#include "ssd1306.h"
 
 #define PIN_I2C_SCL_GPIO_NUM_22 GPIO_NUM_22
 #define PIN_I2C_SDA_GPIO_NUM_21 GPIO_NUM_21
