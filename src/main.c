@@ -1,10 +1,9 @@
 #include <esp_log.h>
 #include <stdio.h>
-#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "freertos/FreeRTOS.h"
 #include "ssd1306.h"
-#include "esp_log.h"
+#include <assert.h>
 
 static const char *TAG = "Cube_Timer";
 
@@ -54,16 +53,24 @@ void app_main() {
     uint8_t buffer[6];
 
 
+    ESP_LOGI(TAG, "######################## SSD1306 - START #########################");
     while (1) {
         i2c_master_transmit_receive(dev_handle_mcu, buf, sizeof(buf), buffer, sizeof(buffer), -1);
         int16_t x = (buffer[0] << 8) | buffer[1];
         int16_t y = (buffer[2] << 8) | buffer[3];
         int16_t z = (buffer[4] << 8) | buffer[5];
+        char lineX[16];
+        char lineY[16];
+        char lineZ[16];
 
-        printf("X %d\n", x);
-        printf("Y %d\n", y);
-        printf("Z %d\n", z);
+        snprintf(lineX, sizeof(lineX), "X: %d", x);
+        snprintf(lineY, sizeof(lineY), "Y: %d", y);
+        snprintf(lineZ, sizeof(lineZ), "Z: %d", z);
 
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        ssd1306_clear_display(dev_hdl, false);
+        ssd1306_display_text(dev_hdl, 0, lineX, false);
+        ssd1306_display_text(dev_hdl, 1, lineY, false);
+        ssd1306_display_text(dev_hdl, 2, lineZ, true);
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
     }
 }
