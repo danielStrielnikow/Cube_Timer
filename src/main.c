@@ -25,7 +25,7 @@ static i2c_master_bus_config_t i2c_mst_config = {
 
 static i2c_master_bus_handle_t bus_handle;
 static i2c_master_dev_handle_t dev_handle_mcu;
-static ssd1306_config_t dev_cfg = SSD1306_128x64_CONFIG_DEFAULT;
+static ssd1306_config_t dev_cfg = SSD1306_128x32_CONFIG_DEFAULT;
 static ssd1306_handle_t dev_hdl;
 
 i2c_device_config_t dev_config_mcu = {
@@ -54,6 +54,7 @@ void app_main() {
 
 
     ESP_LOGI(TAG, "######################## SSD1306 - START #########################");
+    ssd1306_clear_display(dev_hdl, false);
     while (1) {
         i2c_master_transmit_receive(dev_handle_mcu, buf, sizeof(buf), buffer, sizeof(buffer), -1);
         int16_t x = (buffer[0] << 8) | buffer[1];
@@ -63,14 +64,13 @@ void app_main() {
         char lineY[16];
         char lineZ[16];
 
-        snprintf(lineX, sizeof(lineX), "X: %d", x);
-        snprintf(lineY, sizeof(lineY), "Y: %d", y);
-        snprintf(lineZ, sizeof(lineZ), "Z: %d", z);
+        snprintf(lineX, sizeof(lineX), "X:%-6d", x);
+        snprintf(lineY, sizeof(lineY), "Y:%-6d", y);
+        snprintf(lineZ, sizeof(lineZ), "Z:%-6d", z);
 
-        ssd1306_clear_display(dev_hdl, false);
         ssd1306_display_text(dev_hdl, 0, lineX, false);
         ssd1306_display_text(dev_hdl, 1, lineY, false);
-        ssd1306_display_text(dev_hdl, 2, lineZ, true);
-        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        ssd1306_display_text(dev_hdl, 2, lineZ, false);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 }
