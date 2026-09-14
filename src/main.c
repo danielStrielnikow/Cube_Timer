@@ -13,6 +13,7 @@
 #include "driver/i2c_master.h"
 #include "ssd1306.h"
 #include "wifi_config.h"
+#include "cube_logic.h"
 
 static const char *TAG = "Cube_Timer";
 
@@ -25,12 +26,6 @@ const uint8_t SSD1306_ADDR = 0x3C;
 const uint8_t MPU6050_REG_PWR_MGMT_1 = 0x6B;
 const uint8_t MPU6050_REG_ACCEL_XOUT_H = 0x3B;
 const uint8_t MPU6050_WAKEUP_DATA = 0x00;
-
-// ponizej tej wartosci odczyt osi jest traktowany jako szum, a nie grawitacja
-#define SIDE_MIN_THRESHOLD 3000
-
-// bok 6 to tryb uspienia kostki - tak samo jak w starym projekcie na Arduino
-#define SLEEP_SIDE 6
 
 // minimalny czas miedzy wyslaniami UDP, zeby nie zasypac backendu (1.5s)
 #define SEND_COOLDOWN_US (1500 * 1000)
@@ -55,51 +50,7 @@ i2c_device_config_t dev_config_mcu = {
 };
 
 
-static bool timer_running = false;
-static int timed_side = 0;
-static int64_t start_time_us = 0;
-
-static void update_timer(int side, int64_t now_us) {
-    bool is_work_side = side >= 1 && side <= 5;
-
-    if (!is_work_side) {
-        timer_running = false;
-        return;
-    }
-
-    if (!timer_running || side != timed_side) {
-        // nowy bok - zaczynamy liczyc od nowa
-        timed_side = side;
-        start_time_us = now_us;
-        timer_running = true;
-    }
-}
-
-static int64_t get_elapsed_us(int64_t now_us) {
-    if (!timer_running) {
-        return 0;
-    }
-    return now_us - start_time_us;
-}
-
-static int get_cube_side(int16_t x, int16_t y, int16_t z) {
-    int abs_x = abs(x);
-    int abs_y = abs(y);
-    int abs_z = abs(z);
-
-    if (abs_x < SIDE_MIN_THRESHOLD && abs_y < SIDE_MIN_THRESHOLD && abs_z < SIDE_MIN_THRESHOLD) {
-        return 0;
-    }
-
-    if (abs_z >= abs_x && abs_z >= abs_y) {
-        return z > 0 ? 1 : 2;
-    }
-    if (abs_x >= abs_y) {
-        return x > 0 ? 3 : 4;
-    }
-    return y > 0 ? 5 : 6;
-}
-
+static cube_timer_t timer;
 
 //WIFI
 static EventGroupHandle_t wifi_event_group;
@@ -199,6 +150,7 @@ void app_main() {
 
     int last_sent_side = -1;
     int64_t last_send_time_us = 0;
+    cube_timer_init(&timer);
 
     ESP_LOGI(TAG, "######################## Cube Timer - START #########################");
     ssd1306_clear_display(dev_hdl, false);
@@ -217,7 +169,7 @@ void app_main() {
 
         int64_t now_us = esp_timer_get_time();
         int side = get_cube_side(x, y, z);
-        update_timer(side, now_us);
+        cube_timer_update(&timer, side, now_us);
 
         if (side != last_sent_side && (now_us - last_send_time_us) >= SEND_COOLDOWN_US) {
             int side_to_send = (side == SLEEP_SIDE) ? 0 : side;
@@ -227,7 +179,7 @@ void app_main() {
         }
 
         // int wystarczy, bez 64-bitowego formatowania w printf
-        int elapsed_ms = (int) (get_elapsed_us(now_us) / 1000);
+        int elapsed_ms = (int) (cube_timer_elapsed_us(&timer, now_us) / 1000);
 
         char lineSide[16];
         char lineTime[32];
