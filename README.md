@@ -12,8 +12,8 @@ wysyłane przez WiFi do backendu, który zapisuje sesje pracy w bazie danych.
    bok się zmieni.
 3. Backend (Java) odbiera te dane, zapisuje sesję pracy w bazie PostgreSQL i
    wysyła aktualizację dalej przez WebSocket
-4. Na małym wyświetlaczu OLED w kostce widać na żywo odczyt z czujnika i
-   aktualny czas.
+4. Na małym wyświetlaczu OLED w kostce widać na żywo, na którym boku
+   aktualnie leży i ile czasu już na nim jest.
 
 Bok 6 to tryb uśpienia - gdy kostka leży na tym boku, traktujemy to jako
 "nic teraz nie robię", nie jako aktywność.
@@ -44,8 +44,15 @@ Bok 6 to tryb uśpienia - gdy kostka leży na tym boku, traktujemy to jako
 
 MPU6050 i OLED wiszą na tej samej magistrali I2C (mają różne adresy).
 
-<!-- TODO: tutaj dodać schemat połączeń (zdjęcie/rysunek) -->
-<!-- TODO: tutaj dodać zdjęcie gotowej kostki -->
+![Schemat połączeń](docs/images/Cube_Timer.drawio.png)
+
+## Zdjęcia
+
+![Zestaw na płytce stykowej](docs/images/IMG_0180.jpg)
+
+![Zbliżenie na wyświetlacz](docs/images/IMG_0179.jpg)
+
+![MPU6050 podłączony do ESP32](docs/images/IMG_0181.jpg)
 
 ## Struktura projektu
 
@@ -109,9 +116,10 @@ ruchu albo pod skosem), program nic nie wysyła jako "pewny" bok.
 
 ## Jak działa pomiar czasu na wyświetlaczu
 
-To osobny, prostszy stoper na samym ESP32 (niezależny od backendu) - liczy
-czas od wykrycia ruchu kostki do momentu gdy stoi bez ruchu przez sekundę,
-i pokazuje go na OLED razem z numerem boku.
+To osobny stoper liczony na samym ESP32 (niezależny od backendu). Liczy
+czas, jak długo kostka leży na tym samym boku (1-5) - dopóki bok się nie
+zmieni, czas leci dalej, nawet jeśli kostka stoi zupełnie nieruchomo.
+Zmiana boku (albo bok 6 - uśpienie) zeruje stoper i zaczyna liczyć od nowa.
 
 
 ## Autor
