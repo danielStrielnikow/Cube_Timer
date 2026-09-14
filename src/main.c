@@ -26,12 +26,6 @@ const uint8_t MPU6050_REG_PWR_MGMT_1 = 0x6B;
 const uint8_t MPU6050_REG_ACCEL_XOUT_H = 0x3B;
 const uint8_t MPU6050_WAKEUP_DATA = 0x00;
 
-// prog roznicy odczytu, powyzej ktorego uznajemy to za ruch kostki
-#define MOVEMENT_THRESHOLD 3000
-
-// ile czasu bez ruchu oznacza, ze kostka zostala odlozona
-#define STILL_TIME_TO_STOP_US (1000 * 1000)
-
 // ponizej tej wartosci odczyt osi jest traktowany jako szum, a nie grawitacja
 #define SIDE_MIN_THRESHOLD 3000
 
@@ -60,57 +54,32 @@ i2c_device_config_t dev_config_mcu = {
     .scl_speed_hz = 400000,
 };
 
-typedef enum {
-    TIMER_STATE_WAITING,
-    TIMER_STATE_RUNNING,
-    TIMER_STATE_FINISHED,
-} timer_state_t;
 
-static timer_state_t timer_state = TIMER_STATE_WAITING;
+static bool timer_running = false;
+static int timed_side = 0;
 static int64_t start_time_us = 0;
-static int64_t stop_time_us = 0;
-static int64_t still_since_us = 0;
 
-static void update_timer(bool moving, int64_t now_us) {
-    switch (timer_state) {
-        case TIMER_STATE_WAITING:
-            if (moving) {
-                start_time_us = now_us;
-                still_since_us = 0;
-                timer_state = TIMER_STATE_RUNNING;
-            }
-            break;
+static void update_timer(int side, int64_t now_us) {
+    bool is_work_side = side >= 1 && side <= 5;
 
-        case TIMER_STATE_RUNNING:
-            if (moving) {
-                still_since_us = 0;
-            } else if (still_since_us == 0) {
-                still_since_us = now_us;
-            } else if (now_us - still_since_us > STILL_TIME_TO_STOP_US) {
-                stop_time_us = now_us;
-                timer_state = TIMER_STATE_FINISHED;
-            }
-            break;
+    if (!is_work_side) {
+        timer_running = false;
+        return;
+    }
 
-        case TIMER_STATE_FINISHED:
-            if (moving) {
-                start_time_us = now_us;
-                still_since_us = 0;
-                timer_state = TIMER_STATE_RUNNING;
-            }
-            break;
+    if (!timer_running || side != timed_side) {
+        // nowy bok - zaczynamy liczyc od nowa
+        timed_side = side;
+        start_time_us = now_us;
+        timer_running = true;
     }
 }
 
 static int64_t get_elapsed_us(int64_t now_us) {
-    switch (timer_state) {
-        case TIMER_STATE_RUNNING:
-            return now_us - start_time_us;
-        case TIMER_STATE_FINISHED:
-            return stop_time_us - start_time_us;
-        default:
-            return 0;
+    if (!timer_running) {
+        return 0;
     }
+    return now_us - start_time_us;
 }
 
 static int get_cube_side(int16_t x, int16_t y, int16_t z) {
@@ -227,8 +196,6 @@ void app_main() {
 
     uint8_t reg = MPU6050_REG_ACCEL_XOUT_H;
     uint8_t buffer[6];
-    int16_t last_x = 0, last_y = 0, last_z = 0;
-    bool has_last_reading = false;
 
     int last_sent_side = -1;
     int64_t last_send_time_us = 0;
@@ -248,20 +215,9 @@ void app_main() {
         int16_t y = (buffer[2] << 8) | buffer[3];
         int16_t z = (buffer[4] << 8) | buffer[5];
 
-        int32_t diff = 0;
-        if (has_last_reading) {
-            diff = abs(x - last_x) + abs(y - last_y) + abs(z - last_z);
-        }
-        has_last_reading = true;
-        last_x = x;
-        last_y = y;
-        last_z = z;
-
-        bool moving = diff > MOVEMENT_THRESHOLD;
         int64_t now_us = esp_timer_get_time();
-        update_timer(moving, now_us);
-
         int side = get_cube_side(x, y, z);
+        update_timer(side, now_us);
 
         if (side != last_sent_side && (now_us - last_send_time_us) >= SEND_COOLDOWN_US) {
             int side_to_send = (side == SLEEP_SIDE) ? 0 : side;
@@ -273,26 +229,19 @@ void app_main() {
         // int wystarczy, bez 64-bitowego formatowania w printf
         int elapsed_ms = (int) (get_elapsed_us(now_us) / 1000);
 
-        char lineX[16];
-        char lineY[16];
-        char lineZ[16];
-        char lineStatus[48];
+        char lineSide[16];
+        char lineTime[32];
 
-        snprintf(lineX, sizeof(lineX), "X:%-6d", x);
-        snprintf(lineY, sizeof(lineY), "Y:%-6d", y);
-        snprintf(lineZ, sizeof(lineZ), "Z:%-6d", z);
         if (side == 0) {
-            snprintf(lineStatus, sizeof(lineStatus), "Bok:? %d.%02ds",
-                     elapsed_ms / 1000, (elapsed_ms % 1000) / 10);
+            snprintf(lineSide, sizeof(lineSide), "Bok: ?");
         } else {
-            snprintf(lineStatus, sizeof(lineStatus), "Bok:%d %d.%02ds",
-                     side, elapsed_ms / 1000, (elapsed_ms % 1000) / 10);
+            snprintf(lineSide, sizeof(lineSide), "Bok: %d", side);
         }
+        snprintf(lineTime, sizeof(lineTime), "Czas: %d.%02ds",
+                 elapsed_ms / 1000, (elapsed_ms % 1000) / 10);
 
-        ssd1306_display_text(dev_hdl, 0, lineX, false);
-        ssd1306_display_text(dev_hdl, 1, lineY, false);
-        ssd1306_display_text(dev_hdl, 2, lineZ, false);
-        ssd1306_display_text(dev_hdl, 3, lineStatus, false);
+        ssd1306_display_text(dev_hdl, 0, lineSide, false);
+        ssd1306_display_text(dev_hdl, 1, lineTime, false);
 
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
