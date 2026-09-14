@@ -87,7 +87,7 @@ static void update_timer(bool moving, int64_t now_us) {
             } else if (still_since_us == 0) {
                 still_since_us = now_us;
             } else if (now_us - still_since_us > STILL_TIME_TO_STOP_US) {
-                stop_time_us = still_since_us;
+                stop_time_us = now_us;
                 timer_state = TIMER_STATE_FINISHED;
             }
             break;
@@ -114,9 +114,9 @@ static int64_t get_elapsed_us(int64_t now_us) {
 }
 
 static int get_cube_side(int16_t x, int16_t y, int16_t z) {
-    int abs_x = abs((int) x);
-    int abs_y = abs((int) y);
-    int abs_z = abs((int) z);
+    int abs_x = abs(x);
+    int abs_y = abs(y);
+    int abs_z = abs(z);
 
     if (abs_x < SIDE_MIN_THRESHOLD && abs_y < SIDE_MIN_THRESHOLD && abs_z < SIDE_MIN_THRESHOLD) {
         return 0;
