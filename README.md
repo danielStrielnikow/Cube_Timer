@@ -95,24 +95,6 @@ Potrzebujesz Java 21+, Maven (albo `./mvnw` z projektu) i Dockera.
    ```
    Backend nasłuchuje na porcie 8080 (HTTP/WebSocket) i 5000 (UDP - dane z kostki).
 
-## Migracje bazy danych
-
-Baza nie jest tworzona ręcznie ani przez Hibernate - tabele i dane startowe
-tworzą się same przy starcie backendu, przez migracje Flyway. Pliki są w
-`Cube_Backend/src/main/resources/db/migration/`:
-
-- `V1__init_schema.sql` - tworzy tabele (`cubes`, `activity_configs`,
-  `work_sessions`)
-- `V2__seed_default_cube.sql` - dodaje domyślną kostkę `CUBE-01`, żeby
-  backend od razu ją rozpoznawał (bez tego dostajesz w logu
-  `Cube not found: CUBE-01`)
-
-Jak dodać kolejną zmianę w bazie (np. nową kolumnę): stwórz nowy plik
-`V3__cos_tam.sql` w tym samym folderze z odpowiednim SQL-em. Numer musi być
-kolejny i pliku nie wolno już zmieniać po tym, jak raz się wykonał na
-jakiejkolwiek bazie (nawet swojej lokalnej) - zamiast tego pisz nowy plik
-z kolejnym numerem. Flyway pamięta, które migracje już odpalił (tabela
-`flyway_schema_history`), więc przy każdym starcie odpala tylko te nowe.
 
 ## Jak działa wykrywanie boku kostki
 
