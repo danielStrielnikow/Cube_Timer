@@ -24,6 +24,11 @@ const uint8_t MPU6050_WAKEUP_DATA = 0x00;
 // ile czasu bez ruchu oznacza, ze kostka zostala odlozona
 #define STILL_TIME_TO_STOP_US (1000 * 1000)
 
+// przy czulosci +-2g grawitacja (1g) daje odczyt ok. 16384
+#define GRAVITY_ONE_G 16384
+// jak blisko 1g musi byc odczyt, zeby uznac ze ta os wskazuje w dol/gore
+#define GRAVITY_TOLERANCE 4000
+
 static i2c_master_bus_config_t i2c_mst_config = {
     .clk_source = I2C_CLK_SRC_DEFAULT,
     .i2c_port = -1,
@@ -96,6 +101,25 @@ static int64_t get_elapsed_us(int64_t now_us) {
     }
 }
 
+// zwraca ktory bok kostki jest teraz na gorze (1-6), albo 0 gdy nie da sie
+// tego jednoznacznie okreslic (kostka jest przechylona albo w ruchu)
+static int get_cube_side(int16_t x, int16_t y, int16_t z) {
+    int abs_x = abs((int) x);
+    int abs_y = abs((int) y);
+    int abs_z = abs((int) z);
+
+    if (abs_x >= abs_y && abs_x >= abs_z) {
+        if (abs(abs_x - GRAVITY_ONE_G) > GRAVITY_TOLERANCE) return 0;
+        return x > 0 ? 1 : 2;
+    }
+    if (abs_y >= abs_x && abs_y >= abs_z) {
+        if (abs(abs_y - GRAVITY_ONE_G) > GRAVITY_TOLERANCE) return 0;
+        return y > 0 ? 3 : 4;
+    }
+    if (abs(abs_z - GRAVITY_ONE_G) > GRAVITY_TOLERANCE) return 0;
+    return z > 0 ? 5 : 6;
+}
+
 void app_main() {
     ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_mst_config, &bus_handle));
     ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_config_mcu, &dev_handle_mcu));
@@ -139,22 +163,28 @@ void app_main() {
 
         // int wystarczy, bez 64-bitowego formatowania w printf
         int elapsed_ms = (int) (get_elapsed_us(now_us) / 1000);
+        int side = get_cube_side(x, y, z);
 
         char lineX[16];
         char lineY[16];
         char lineZ[16];
-        char lineTime[16];
+        char lineStatus[48];
 
         snprintf(lineX, sizeof(lineX), "X:%-6d", x);
         snprintf(lineY, sizeof(lineY), "Y:%-6d", y);
         snprintf(lineZ, sizeof(lineZ), "Z:%-6d", z);
-        snprintf(lineTime, sizeof(lineTime), "Czas:%d.%02ds",
-                 elapsed_ms / 1000, (elapsed_ms % 1000) / 10);
+        if (side == 0) {
+            snprintf(lineStatus, sizeof(lineStatus), "Bok:? %d.%02ds",
+                     elapsed_ms / 1000, (elapsed_ms % 1000) / 10);
+        } else {
+            snprintf(lineStatus, sizeof(lineStatus), "Bok:%d %d.%02ds",
+                     side, elapsed_ms / 1000, (elapsed_ms % 1000) / 10);
+        }
 
         ssd1306_display_text(dev_hdl, 0, lineX, false);
         ssd1306_display_text(dev_hdl, 1, lineY, false);
         ssd1306_display_text(dev_hdl, 2, lineZ, false);
-        ssd1306_display_text(dev_hdl, 3, lineTime, false);
+        ssd1306_display_text(dev_hdl, 3, lineStatus, false);
 
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
