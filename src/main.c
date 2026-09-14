@@ -56,10 +56,14 @@ static cube_timer_t timer;
 static EventGroupHandle_t wifi_event_group;
 #define WIFI_CONNECTED_BIT BIT0
 
+static volatile bool wifi_connected = false;
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     if (event_base == WIFI_EVENT && (event_id == WIFI_EVENT_STA_START || event_id == WIFI_EVENT_STA_DISCONNECTED)) {
+        wifi_connected = false;
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        wifi_connected = true;
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -110,10 +114,10 @@ static void udp_init(void) {
     server_addr.sin_addr.s_addr = inet_addr(SERVER_IP);
 }
 
-// wysyla do backendu JSON
-static void udp_send_side(int side, float battery) {
+// wysyla do backendu JSON, zwraca true jesli sie udalo
+static bool udp_send_side(int side, float battery) {
     if (udp_sock < 0) {
-        return;
+        return false;
     }
 
     char json[96];
@@ -122,8 +126,69 @@ static void udp_send_side(int side, float battery) {
     int sent = sendto(udp_sock, json, strlen(json), 0, (struct sockaddr *) &server_addr, sizeof(server_addr));
     if (sent < 0) {
         ESP_LOGW(TAG, "Nie udalo sie wyslac UDP");
-    } else {
-        ESP_LOGI(TAG, "UDP wyslano: %s", json);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "UDP wyslano: %s", json);
+    return true;
+}
+
+// ===== bufor na dane, gdy chwilowo nie ma polaczenia z siecia =====
+// zeby nie gubic zdarzen jak WiFi na chwile padnie (np. kostka wyjedzie
+// poza zasieg albo router sie zrestartuje)
+
+#define OFFLINE_BUFFER_SIZE 20
+
+static int offline_buffer[OFFLINE_BUFFER_SIZE];
+static int offline_buffer_count = 0;
+static int offline_buffer_head = 0; // indeks najstarszego zapisanego boku
+
+static void offline_buffer_push(int side) {
+    if (offline_buffer_count == OFFLINE_BUFFER_SIZE) {
+        // bufor pelny - wyrzucamy najstarszy wpis, zeby zrobic miejsce na nowy
+        offline_buffer_head = (offline_buffer_head + 1) % OFFLINE_BUFFER_SIZE;
+        offline_buffer_count--;
+    }
+    int tail = (offline_buffer_head + offline_buffer_count) % OFFLINE_BUFFER_SIZE;
+    offline_buffer[tail] = side;
+    offline_buffer_count++;
+}
+
+static bool offline_buffer_peek(int *side) {
+    if (offline_buffer_count == 0) {
+        return false;
+    }
+    *side = offline_buffer[offline_buffer_head];
+    return true;
+}
+
+static void offline_buffer_drop_oldest(void) {
+    if (offline_buffer_count == 0) {
+        return;
+    }
+    offline_buffer_head = (offline_buffer_head + 1) % OFFLINE_BUFFER_SIZE;
+    offline_buffer_count--;
+}
+
+// wysyla bok od razu, jak jest polaczenie. Jak nie ma (albo wysylka sie nie
+// udala), zapisuje go do bufora zeby wyslac pozniej.
+static void send_or_buffer(int side) {
+    if (wifi_connected && udp_send_side(side, 3.85f)) {
+        return;
+    }
+    ESP_LOGW(TAG, "Brak polaczenia - zapisuje bok %d do bufora", side);
+    offline_buffer_push(side);
+}
+
+// probuje wyslac to, co zalega w buforze, odkad wrocilo polaczenie
+static void flush_offline_buffer(void) {
+    int side;
+    while (wifi_connected && offline_buffer_peek(&side)) {
+        if (!udp_send_side(side, 3.85f)) {
+            break; // znowu nie wyszlo - sprobujemy w kolejnej petli
+        }
+        offline_buffer_drop_oldest();
+        ESP_LOGI(TAG, "Wyslano zalegly bok %d z bufora", side);
     }
 }
 
@@ -173,10 +238,12 @@ void app_main() {
 
         if (side != last_sent_side && (now_us - last_send_time_us) >= SEND_COOLDOWN_US) {
             int side_to_send = (side == SLEEP_SIDE) ? 0 : side;
-            udp_send_side(side_to_send, 3.85f);
+            send_or_buffer(side_to_send);
             last_sent_side = side;
             last_send_time_us = now_us;
         }
+
+        flush_offline_buffer();
 
         // int wystarczy, bez 64-bitowego formatowania w printf
         int elapsed_ms = (int) (cube_timer_elapsed_us(&timer, now_us) / 1000);
