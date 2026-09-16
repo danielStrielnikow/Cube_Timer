@@ -13,6 +13,7 @@
 #include "driver/i2c_master.h"
 #include "ssd1306.h"
 #include "wifi_config.h"
+#include "mqtt_config.h"
 #include "cube_logic.h"
 #include "mqtt_client.h"
 static const char *TAG = "Cube_Timer";
@@ -159,8 +160,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 static void mqtt_start(void) {
     const esp_mqtt_client_config_t mqtt_cfg = {
         .broker = {
-            .address.uri = "mqtt://broker.hivemq.com",
-            .address.port = 1883
+            .address.uri = ADDRESS_URI,
+            .address.port = ADDRESS_PORT
         },
     };
 
