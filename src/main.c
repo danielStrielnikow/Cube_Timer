@@ -14,7 +14,7 @@
 #include "ssd1306.h"
 #include "wifi_config.h"
 #include "cube_logic.h"
-
+#include "mqtt_client.h"
 static const char *TAG = "Cube_Timer";
 
 #define PIN_I2C_SCL GPIO_NUM_22
@@ -68,6 +68,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     }
 }
 
+static int isConnected = 0;
+
 static void wifi_connect(void) {
     wifi_event_group = xEventGroupCreate();
 
@@ -95,42 +97,96 @@ static void wifi_connect(void) {
     ESP_LOGI(TAG, "Laczenie z WiFi: %s", WIFI_SSID);
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     ESP_LOGI(TAG, "Polaczono z WiFi, wysylam dane do %s:%d", SERVER_IP, SERVER_PORT);
+    isConnected = 1;
 }
 
-//UDP
+esp_mqtt_client_handle_t mqttClient;
 
-static int udp_sock = -1;
-static struct sockaddr_in server_addr;
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
+    ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%" PRIi32, base, event_id);
+    esp_mqtt_event_handle_t event = event_data;
+    esp_mqtt_client_handle_t client = event->client;
+    int msg_id;
+    switch ((esp_mqtt_event_id_t) event_id) {
+        case MQTT_EVENT_CONNECTED:
+            ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");;
 
-static void udp_init(void) {
-    udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-    if (udp_sock < 0) {
-        ESP_LOGE(TAG, "Nie udalo sie utworzyc gniazda UDP");
-        return;
+            break;
+
+        case MQTT_EVENT_DISCONNECTED:
+            ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+            break;
+
+        case MQTT_EVENT_SUBSCRIBED:
+            ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d, return code=0x%02x ", event->msg_id,
+                     (uint8_t)*event->data);
+            break;
+
+        case MQTT_EVENT_UNSUBSCRIBED:
+            ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
+            break;
+
+        case MQTT_EVENT_PUBLISHED:
+            ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+            break;
+
+        case MQTT_EVENT_DATA:
+            ESP_LOGI(TAG, "MQTT_EVENT_DATA");
+            printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+            printf("DATA=%.*s\r\n", event->data_len, event->data);
+            break;
+
+        case MQTT_EVENT_ERROR:
+            ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
+            if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+                ESP_LOGI(TAG, "Last error code reported from esp-tls: 0x%x", event->error_handle->esp_tls_last_esp_err);
+                ESP_LOGI(TAG, "Last tls stack error number: 0x%x", event->error_handle->esp_tls_stack_err);
+                ESP_LOGI(TAG, "Last captured errno : %d (%s)", event->error_handle->esp_transport_sock_errno,
+                         strerror(event->error_handle->esp_transport_sock_errno));
+            } else if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
+                ESP_LOGI(TAG, "Connection refused error: 0x%x", event->error_handle->connect_return_code);
+            } else {
+                ESP_LOGW(TAG, "Unknown error type: 0x%x", event->error_handle->error_type);
+            }
+            break;
+
+        default:
+            ESP_LOGI(TAG, "Other event id:%d", event->event_id);
+            break;
     }
-
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(SERVER_PORT);
-    server_addr.sin_addr.s_addr = inet_addr(SERVER_IP);
 }
 
-// wysyla do backendu JSON, zwraca true jesli sie udalo
-static bool udp_send_side(int side, float battery) {
-    if (udp_sock < 0) {
-        return false;
-    }
+static void mqtt_start(void) {
+    const esp_mqtt_client_config_t mqtt_cfg = {
+        .broker = {
+            .address.uri = "mqtt://broker.hivemq.com",
+            .address.port = 1883
+        },
+    };
 
+    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    mqttClient = client;
+    /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
+    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+    esp_mqtt_client_start(client);
+}
+
+
+static bool mqtt_publish_task(int side, float battery) {
+    char topic[64];
     char json[96];
+
+    snprintf(topic, sizeof(topic), "cube/%s/side", CUBE_ID);
     snprintf(json, sizeof(json), "{\"cubeId\":\"%s\",\"side\":%d,\"battery\":%.2f}", CUBE_ID, side, battery);
 
-    int sent = sendto(udp_sock, json, strlen(json), 0, (struct sockaddr *) &server_addr, sizeof(server_addr));
-    if (sent < 0) {
-        ESP_LOGW(TAG, "Nie udalo sie wyslac UDP");
-        return false;
+    int msg_id = esp_mqtt_client_publish(mqttClient, topic, json, 0, 0, 0);
+    if (msg_id == 0) {
+        ESP_LOGI(TAG, "Wyslano na temat %s: %s", topic, json);
+        return true;
     }
 
-    ESP_LOGI(TAG, "UDP wyslano: %s", json);
-    return true;
+    ESP_LOGW(TAG, "Blad msg_id:%d przy wysylaniu na temat %s", msg_id, topic);
+    return false;
 }
 
 // ===== bufor na dane, gdy chwilowo nie ma polaczenia z siecia =====
@@ -173,7 +229,7 @@ static void offline_buffer_drop_oldest(void) {
 // wysyla bok od razu, jak jest polaczenie. Jak nie ma (albo wysylka sie nie
 // udala), zapisuje go do bufora zeby wyslac pozniej.
 static void send_or_buffer(int side) {
-    if (wifi_connected && udp_send_side(side, 3.85f)) {
+    if (wifi_connected && mqtt_publish_task(side, 3.85f)) {
         return;
     }
     ESP_LOGW(TAG, "Brak polaczenia - zapisuje bok %d do bufora", side);
@@ -184,13 +240,14 @@ static void send_or_buffer(int side) {
 static void flush_offline_buffer(void) {
     int side;
     while (wifi_connected && offline_buffer_peek(&side)) {
-        if (!udp_send_side(side, 3.85f)) {
+        if (!mqtt_publish_task(side, 3.85f)) {
             break; // znowu nie wyszlo - sprobujemy w kolejnej petli
         }
         offline_buffer_drop_oldest();
         ESP_LOGI(TAG, "Wyslano zalegly bok %d z bufora", side);
     }
 }
+
 
 void app_main() {
     esp_err_t nvs_err = nvs_flash_init();
@@ -200,8 +257,10 @@ void app_main() {
     }
     ESP_ERROR_CHECK(nvs_err);
 
+    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
     wifi_connect();
-    udp_init();
+
+    if (isConnected) mqtt_start();
 
     ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_mst_config, &bus_handle));
     ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_config_mcu, &dev_handle_mcu));
